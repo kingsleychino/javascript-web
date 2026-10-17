@@ -1,0 +1,6 @@
+# Send only what the image needs to the Docker build
+*
+!nginx.conf
+!app/
+app/**/.DS_Store
+app/**/._*
