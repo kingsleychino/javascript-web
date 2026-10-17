@@ -15,7 +15,7 @@ on:
   workflow_dispatch:
 
 env:
-  MODE: destroy                        # <-- change to: destroy
+  MODE: apply                        # <-- change to: destroy
   AWS_REGION: us-east-1
   ECR_REPOSITORY: javascript-web
 
