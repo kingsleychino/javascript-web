@@ -32,6 +32,7 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Initialize Terraform
+        id: init
         run: terraform init -backend-config="bucket=${{ env.TF_STATE_BUCKET_NAME }}" -backend-config="region=${{ env.AWS_REGION }}"
 
       - name: Validate Terraform configuration
@@ -49,4 +50,5 @@ jobs:
           echo "Terraform plan created."
 
       - name: Apply Terraform deployment
+        id: apply
         run: terraform apply -auto-approve tfplan
