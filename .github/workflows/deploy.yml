@@ -1,42 +1,36 @@
 # ==========================================================================
-#  CI/CD: create the server with Terraform, then deploy the app to it
+#  CI/CD with Terraform
 #
-#  Job 1 (infra):  Terraform creates the EC2 server  -> gives us its IP
-#  Job 2 (app):    Build Docker image -> push to ECR -> run it on the server
+#  MODE: apply   -> create the server, build the app, run it on the server
+#  MODE: destroy -> delete the server and the ECR repository
+#
+#  To switch, change ONE line below (MODE) and push.
 # ==========================================================================
 
 name: CI/CD with Terraform
 
-# When does this run?  On every push to main, or by clicking "Run workflow"
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
-# Settings used by both jobs
 env:
+  MODE: apply                        # <-- change to: destroy
   AWS_REGION: us-east-1
-  ECR_REPOSITORY: javascript-web     # name of the image repository in ECR
-  CONTAINER_NAME: myappcontainer     # name of the running container on the server
+  ECR_REPOSITORY: javascript-web
 
 jobs:
 
   # ------------------------------------------------------------------------
-  # JOB 1: Create / update the server
+  # JOB 1: Terraform (create or destroy the server)
   # ------------------------------------------------------------------------
   infra:
     runs-on: ubuntu-latest
-
-    # Share the server IP with Job 2
     outputs:
       server_ip: ${{ steps.get-ip.outputs.ip }}
-
-    # Run every command inside the terraform/ folder
     defaults:
       run:
         working-directory: terraform
-
-    # Terraform reads TF_VAR_xxx as the variable "xxx" in variables.tf
     env:
       TF_VAR_aws_region: us-east-1
       TF_VAR_key_name: deployer-key
@@ -44,122 +38,108 @@ jobs:
       TF_VAR_private_key: ${{ secrets.AWS_SSH_KEY_PRIVATE }}
 
     steps:
-      # 1. Download the repository code
       - uses: actions/checkout@v4
 
-      # 2. Install Terraform (must be 1.6.1 or newer)
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.9.8
           terraform_wrapper: false
 
-      # 3. Log in to AWS
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # 4. Connect Terraform to the S3 bucket that stores its state
       - name: Terraform init
         run: terraform init -backend-config="bucket=${{ secrets.AWS_TF_STATE_BUCKET_NAME }}" -backend-config="region=${{ env.AWS_REGION }}"
 
-      # 5. Show what will change
-      - name: Terraform plan
-        run: terraform plan -out=tfplan
-
-      # 6. Make the changes
+      # ---- MODE: apply ----
       - name: Terraform apply
-        run: terraform apply -auto-approve tfplan
+        if: env.MODE == 'apply'
+        run: terraform apply -auto-approve
 
-      # 7. Save the server's IP address for Job 2
-      - name: Get server IP
-        id: get-ip
-        run: echo "ip=$(terraform output -raw instance_public_ip)" >> "$GITHUB_OUTPUT"
+      # - name: Get server IP
+      #   if: env.MODE == 'apply'
+      #   id: get-ip
+      #   run: echo "ip=$(terraform output -raw instance_public_ip)" >> "$GITHUB_OUTPUT"
+
+      # ---- MODE: destroy ----
+      - name: Terraform destroy
+        if: env.MODE == 'destroy'
+        run: terraform destroy -auto-approve
+
+      - name: Delete ECR repository
+        if: env.MODE == 'destroy'
+        run: aws ecr delete-repository --repository-name "$ECR_REPOSITORY" --force || true
 
   # ------------------------------------------------------------------------
-  # JOB 2: Build the app and run it on the server
+  # JOB 2: Build and deploy the app (skipped in destroy mode: no server IP)
   # ------------------------------------------------------------------------
   app:
     runs-on: ubuntu-latest
-    needs: infra                      # wait for Job 1 to finish first
-
+    needs: infra
+    if: needs.infra.outputs.server_ip != ''
     env:
       SERVER_IP: ${{ needs.infra.outputs.server_ip }}
 
     steps:
-      # 1. Download the repository code (Dockerfile is in the repo root)
       - uses: actions/checkout@v4
 
-      # 2. Log in to AWS
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # 3. Create the ECR repository the first time (does nothing if it exists)
       - name: Create ECR repository if missing
         run: aws ecr describe-repositories --repository-names "$ECR_REPOSITORY" || aws ecr create-repository --repository-name "$ECR_REPOSITORY"
 
-      # 4. Log Docker in to ECR
       - name: Login to ECR
         id: ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      # 5. Build the image and push it to ECR
       - name: Build and push image
         run: |
           IMAGE=${{ steps.ecr.outputs.registry }}/$ECR_REPOSITORY:${{ github.sha }}
           docker build -t "$IMAGE" .
           docker push "$IMAGE"
 
-      # 6. Wait until the new server has finished booting
-      - name: Wait for server
+      - name: Wait for server to boot
         run: |
           ID=$(aws ec2 describe-instances --filters "Name=ip-address,Values=$SERVER_IP" --query "Reservations[0].Instances[0].InstanceId" --output text)
           aws ec2 wait instance-status-ok --instance-ids "$ID"
 
-      # 7. Make a temporary ECR password for the server (valid 12 hours)
-      - name: Get ECR password
+      - name: Get ECR password for the server
         id: token
         run: |
           PASSWORD=$(aws ecr get-login-password)
           echo "::add-mask::$PASSWORD"
           echo "password=$PASSWORD" >> "$GITHUB_OUTPUT"
 
-      # 8. SSH into the server and run the new container
       - name: Deploy to server
         uses: appleboy/ssh-action@v1.2.5
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
           IMAGE: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
           PASSWORD: ${{ steps.token.outputs.password }}
-          NAME: ${{ env.CONTAINER_NAME }}
         with:
           host: ${{ env.SERVER_IP }}
           username: ubuntu
           key: ${{ secrets.AWS_SSH_KEY_PRIVATE }}
-          envs: REGISTRY,IMAGE,PASSWORD,NAME
+          envs: REGISTRY,IMAGE,PASSWORD
           script: |
             set -e
-
-            # Install Docker (only the first time)
             if ! command -v docker; then
               sudo cloud-init status --wait || true
               sudo apt-get update -y
               sudo apt-get install -y docker.io
             fi
-
-            # Log in to ECR and download the new image
             echo "$PASSWORD" | sudo docker login --username AWS --password-stdin "$REGISTRY"
             sudo docker pull "$IMAGE"
+            sudo docker rm -f myapp || true
+            sudo docker run -d --name myapp --restart unless-stopped -p 8080:8080 "$IMAGE"
 
-            # Replace the old container with the new one
-            sudo docker rm -f "$NAME" || true
-            sudo docker run -d --name "$NAME" --restart unless-stopped -p 8080:8080 "$IMAGE"
-
-      # 9. Check the website answers
       - name: Check site is up
         run: |
           sleep 5
