@@ -2,10 +2,13 @@ name: CI/CD with Terraform
 
 on:
   push:
+    # Must match the branch name EXACTLY (case-sensitive). Check with: git branch --show-current
     branches:
       - Compile-CID/CD-with-Terraform-AWS
+  # Adds a "Run workflow" button in the Actions tab so you can run it by hand
   workflow_dispatch:
 
+# Never run two applies against the same state at once
 concurrency:
   group: terraform-${{ github.ref }}
   cancel-in-progress: false
@@ -17,6 +20,7 @@ env:
   AWS_REGION: us-east-1
   TF_IN_AUTOMATION: "true"
   TF_INPUT: "false"
+  # Folder that holds your .tf files ("." = repo root). Change if they live in e.g. ./terraform
   TF_WORKING_DIR: .
 
 jobs:
@@ -27,6 +31,9 @@ jobs:
         working-directory: ${{ env.TF_WORKING_DIR }}
 
     env:
+      # Terraform reads TF_VAR_<name> automatically as var.<name>.
+      # This is safer than -var="..." on the command line: multi-line SSH keys
+      # keep their newlines, and the values never appear in the shell command.
       TF_VAR_private_key: ${{ secrets.AWS_SSH_KEY_PRIVATE }}
       TF_VAR_public_key: ${{ secrets.AWS_SSH_KEY_PUBLIC }}
       TF_VAR_aws_region: us-east-1
