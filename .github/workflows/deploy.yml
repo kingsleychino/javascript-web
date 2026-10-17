@@ -19,7 +19,7 @@ env:
   TF_IN_AUTOMATION: "true"
   TF_INPUT: "false"
   # Folder containing your .tf files ("." = repo root, or e.g. "terraform")
-  TF_WORKING_DIR: .
+  TF_WORKING_DIR: terraform
 
 jobs:
   deploy-infra:
