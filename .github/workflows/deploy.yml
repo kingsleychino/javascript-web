@@ -15,7 +15,7 @@ on:
   workflow_dispatch:
 
 env:
-  MODE: apply                        # <-- change to: destroy
+  MODE: destroy                        # <-- change to: destroy
   AWS_REGION: us-east-1
   ECR_REPOSITORY: javascript-web
 
@@ -59,10 +59,10 @@ jobs:
         if: env.MODE == 'apply'
         run: terraform apply -auto-approve
 
-      # - name: Get server IP
-      #   if: env.MODE == 'apply'
-      #   id: get-ip
-      #   run: echo "ip=$(terraform output -raw instance_public_ip)" >> "$GITHUB_OUTPUT"
+      - name: Get server IP
+        if: env.MODE == 'apply'
+        id: get-ip
+        run: echo "ip=$(terraform output -raw instance_public_ip)" >> "$GITHUB_OUTPUT"
 
       # ---- MODE: destroy ----
       - name: Terraform destroy
