@@ -3,7 +3,7 @@ name: CI/CD with Terraform
 on:
   push:
     branches:
-      - Compile-CID/CD-with-Terraform-AWS
+      - main
   workflow_dispatch:
 
 concurrency:
@@ -15,7 +15,8 @@ permissions:
 
 env:
   AWS_REGION: us-east-1
-  TF_VERSION: 1.6.0
+  # 1.6.0 cannot verify provider signatures (expired HashiCorp key); fixed in 1.6.1+
+  TF_VERSION: 1.9.8
   TF_IN_AUTOMATION: "true"
   TF_INPUT: "false"
   # Folder containing your .tf files ("." = repo root, or e.g. "terraform")
